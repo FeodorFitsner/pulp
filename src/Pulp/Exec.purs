@@ -7,25 +7,25 @@ module Pulp.Exec
   ) where
 
 import Prelude
-import Data.Either (either)
+import Data.Either (Either(..), either)
 import Data.Function
 import Data.String (stripSuffix)
 import Data.StrMap (StrMap())
 import Data.Maybe (Maybe(..))
+import Data.Maybe.Unsafe (fromJust)
 import Data.Array as Array
-import Data.Nullable (toNullable)
 import Control.Monad (when)
 import Control.Monad.Error.Class (MonadError, throwError)
 import Control.Monad.Eff.Exception (Error(), error)
 import Control.Monad.Eff.Class (liftEff)
 import Control.Monad.Aff
 import Control.Monad.Aff.AVar (takeVar, putVar, makeVar)
+import Node.ChildProcess as CP
+import Unsafe.Coerce (unsafeCoerce)
 
 import Pulp.System.Process
 import Pulp.System.Stream
 import Pulp.System.FFI
-import Pulp.System.ChildProcess
-import Pulp.System.Files
 
 psc :: Array String -> Array String -> Array String -> Maybe (StrMap String) -> AffN String
 psc deps ffi args env =
@@ -36,15 +36,8 @@ pscBundle :: Array String -> Array String -> Maybe (StrMap String) -> AffN Strin
 pscBundle files args env =
   execQuiet "psc-bundle" (files <> args) env
 
-shareAll :: StdIOOptions
-shareAll =
-  { stdin: ShareStream  (forget stdin)
-  , stdout: ShareStream (forget stdout)
-  , stderr: ShareStream (forget stderr)
-  }
-
-shareAllButStdout :: StdIOOptions
-shareAllButStdout = shareAll { stdout = Pipe }
+inheritAllButStdout :: Array (Maybe CP.StdIOBehaviour)
+inheritAllButStdout = fromJust (Array.updateAt 1 (Just CP.Pipe) CP.inherit)
 
 -- | Start a child process asynchronously, with the given command line
 -- | arguments and environment, and wait for it to exit.
@@ -59,10 +52,13 @@ shareAllButStdout = shareAll { stdout = Pipe }
 -- | pulp, which usually means they will immediately appear in the terminal).
 exec :: String -> Array String -> Maybe (StrMap String) -> AffN Unit
 exec cmd args env = do
-  child <- liftEff $ spawn cmd args (toNullable env) shareAll
-  attempt (wait child) >>= either (handleErrors cmd retry) onExit
+  child <- liftEff $ CP.spawn cmd args (def { env = env
+                                            , stdio = CP.inherit })
+  wait child >>= either (handleErrors cmd retry) onExit
 
   where
+  def = CP.defaultSpawnOptions
+
   onExit code =
     when (code > 0) $
       throwError $ error $ "Subcommand terminated with exit code " <> show code
@@ -73,12 +69,15 @@ exec cmd args env = do
 -- | captured and returned as a String.
 execQuiet :: String -> Array String -> Maybe (StrMap String) -> AffN String
 execQuiet cmd args env = do
-  child <- liftEff $ spawn cmd args (toNullable env) shareAllButStdout
+  child <- liftEff $ CP.spawn cmd args (def { env = env
+                                            , stdio = inheritAllButStdout })
   outVar <- makeVar
-  forkAff (concatStream child.stdout >>= putVar outVar)
-  attempt (wait child) >>= either (handleErrors cmd retry) (onExit outVar)
+  forkAff (concatStream (CP.stdout child) >>= putVar outVar)
+  wait child >>= either (handleErrors cmd retry) (onExit outVar)
 
   where
+  def = CP.defaultSpawnOptions
+
   onExit outVar code =
     takeVar outVar >>= \childOut ->
       if code == 0
@@ -89,9 +88,18 @@ execQuiet cmd args env = do
 
   retry newCmd = execQuiet newCmd args env
 
-handleErrors :: forall a. String -> (String -> AffN a) -> Error -> AffN a
+-- | A slightly weird combination of `onError` and `onExit` into one.
+wait :: CP.ChildProcess -> AffN (Either CP.ChildProcessError Int)
+wait child = makeAff \_ win -> do
+  CP.onExit child (win <<< Right <<< toInt)
+  CP.onError child (win <<< Left)
+  where
+  toInt (CP.Normally x) = x
+  toInt (CP.BySignal _) = 127
+
+handleErrors :: forall a. String -> (String -> AffN a) -> CP.ChildProcessError -> AffN a
 handleErrors cmd retry err
-  | isENOENT err = do
+  | err.code == "ENOENT" = do
      platformWin32 <- ("win32" ==) <$> liftEff getPlatform
      -- On windows, if the executable wasn't found, try adding .cmd
      if platformWin32
@@ -103,9 +111,12 @@ handleErrors cmd retry err
          throwError $ error $
            "`" <> cmd <> "` executable not found."
   | otherwise =
-     throwError err
+     throwError (toErr err)
+     where
+     toErr :: CP.ChildProcessError -> Error
+     toErr = unsafeCoerce
 
-concatStream :: ReadableStream String -> AffN String
+concatStream :: forall a. ReadableStream a -> AffN String
 concatStream stream = runNode $ runFn2 concatStream' stream
 
-foreign import concatStream' :: Fn2 (ReadableStream String) (Callback String) Unit
+foreign import concatStream' :: forall a. Fn2 (ReadableStream a) (Callback String) Unit

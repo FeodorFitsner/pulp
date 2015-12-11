@@ -10,12 +10,13 @@ import Control.Monad.Eff.Console (CONSOLE())
 import Data.Function
 
 import Node.FS (FS())
+import Node.ChildProcess (CHILD_PROCESS())
 import Node.Buffer (BUFFER())
 
 foreign import data Node :: !
 foreign import data NodeError :: *
 
-type PulpEffects = (node :: Node, console :: CONSOLE, buffer :: BUFFER, fs :: FS, avar :: AVAR, err :: EXCEPTION)
+type PulpEffects = (node :: Node, console :: CONSOLE, buffer :: BUFFER, fs :: FS, avar :: AVAR, err :: EXCEPTION, cp :: CHILD_PROCESS)
 type EffN a = Eff PulpEffects a
 type AffN a = Aff PulpEffects a
 

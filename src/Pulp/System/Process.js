@@ -48,3 +48,4 @@ exports.setEnv = function setEnv(envvar) {
 };
 
 exports.__dirname = __dirname;
+exports.__filename = __filename;

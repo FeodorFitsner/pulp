@@ -12,6 +12,7 @@ module Pulp.System.Process
        , chdir
        , cwd
        , __dirname
+       , __filename
        ) where
 
 import Prelude
@@ -57,3 +58,4 @@ foreign import chdir :: String -> EffN Unit
 foreign import cwd :: EffN String
 
 foreign import __dirname :: String
+foreign import __filename :: String
