@@ -11,3 +11,4 @@ install:
 # "build" means "build using the project or solution file", which we don't
 # have. So turn this off.
 build: off
+test: off
