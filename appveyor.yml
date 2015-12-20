@@ -2,6 +2,9 @@
 environment:
   nodejs_version: "4.2"
 
+cache:
+  - '%LOCALAPPDATA%\bower\cache\packages -> bower.json'
+
 # Install scripts. (runs after repo cloning)
 install:
   - ps: Install-Product node $env:nodejs_version
